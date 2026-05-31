@@ -76,8 +76,6 @@ async def download_instagram_video(url: str) -> Path | None:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
-        print("RETURN CODE:", proc.returncode)
-print("STDERR:", stderr.decode())
 
         matches = list(DOWNLOAD_DIR.glob(f"{out_id}.*"))
         if matches:
