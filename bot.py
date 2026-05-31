@@ -300,6 +300,107 @@ async def handle_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             video_path.unlink()
 
 
+async def search_and_download_song(query: str) -> tuple[Path | None, str]:
+    """YouTube'dan qo'shiq qidirish va yuklash"""
+    out_id = uuid.uuid4().hex
+    out_template = str(DOWNLOAD_DIR / f"{out_id}.%(ext)s")
+
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--max-filesize", "50m",
+        "-f", "bestaudio[ext=m4a]/bestaudio/best",
+        "--extract-audio",
+        "--audio-format", "mp3",
+        "--audio-quality", "0",
+        "-o", out_template,
+        f"ytsearch1:{query}",
+        "--print", "title",
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        logger.error("yt-dlp qo'shiq yuklamadi: %s", stderr.decode())
+        return None, ""
+
+    title = stdout.decode().strip().split("\n")[0] if stdout else query
+    matches = list(DOWNLOAD_DIR.glob(f"{out_id}.*"))
+    if not matches:
+        return None, title
+
+    return matches[0], title
+
+
+async def handle_song_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = " ".join(context.args) if context.args else ""
+    if not query:
+        await update.message.reply_text("Foydalanish: /qoshiq <qo'shiq nomi>\nMasalan: /qoshiq Shokir Yunusov")
+        return
+
+    status_msg = await update.message.reply_text(f"🔍 <b>{query}</b> qidirilmoqda...", parse_mode="HTML")
+
+    audio_path = None
+    try:
+        audio_path, title = await search_and_download_song(query)
+
+        if audio_path is None:
+            await status_msg.edit_text("❌ Qo'shiq topilmadi. Boshqa nom bilan sinab ko'ring.")
+            return
+
+        await status_msg.edit_text("📤 Qo'shiq jo'natilmoqda...")
+        with open(audio_path, "rb") as f:
+            await update.message.reply_audio(
+                audio=f,
+                title=title,
+                caption="🎵 YouTubedan topildi",
+            )
+        await status_msg.delete()
+
+    except Exception as e:
+        logger.exception("Qo'shiq yuklashda xato")
+        await status_msg.edit_text(f"❌ Xato yuz berdi: {e}")
+    finally:
+        if audio_path and audio_path.exists():
+            audio_path.unlink()
+
+
+async def handle_voice_song_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ovoz xabari orqali qo'shiq qidirish"""
+    voice = update.message.voice or update.message.audio
+    if not voice:
+        return
+
+    status_msg = await update.message.reply_text("🎵 Ovoz tahlil qilinmoqda, iltimos kuting...")
+
+    voice_path = DOWNLOAD_DIR / f"{uuid.uuid4().hex}.ogg"
+    audio_path = None
+
+    try:
+        file = await context.bot.get_file(voice.file_id)
+        await file.download_to_drive(voice_path)
+
+        # yt-dlp orqali ovozga o'xshash qo'shiq qidirish (SoundHound/Shazam API yo'q, shuning uchun foydalanuvchidan nom so'raymiz)
+        await status_msg.edit_text(
+            "🎵 Ovoz qabul qilindi!\n\n"
+            "Afsuski, hozircha ovozdan avtomatik qo'shiq tanib olish imkoni yo'q.\n\n"
+            "Iltimos, qo'shiq nomini yozing:\n"
+            "/qoshiq <qo'shiq nomi>"
+        )
+
+    except Exception as e:
+        logger.exception("Ovoz qayta ishlashda xato")
+        await status_msg.edit_text(f"❌ Xato yuz berdi: {e}")
+    finally:
+        if voice_path.exists():
+            voice_path.unlink()
+
+
 async def echo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text or ""
     if is_instagram_url(text):
@@ -309,7 +410,30 @@ async def echo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     elif is_tiktok_url(text):
         await handle_tiktok(update, context)
     else:
-        await update.message.reply_text(text)
+        # Matn qo'shiq qidirish uchun
+        if len(text) > 2 and not text.startswith("/"):
+            status_msg = await update.message.reply_text(f"🔍 <b>{text}</b> qidirilmoqda...", parse_mode="HTML")
+            audio_path = None
+            try:
+                audio_path, title = await search_and_download_song(text)
+                if audio_path:
+                    await status_msg.edit_text("📤 Qo'shiq jo'natilmoqda...")
+                    with open(audio_path, "rb") as f:
+                        await update.message.reply_audio(
+                            audio=f,
+                            title=title,
+                            caption="🎵 YouTubedan topildi",
+                        )
+                    await status_msg.delete()
+                else:
+                    await status_msg.edit_text("❌ Qo'shiq topilmadi. Boshqa nom bilan sinab ko'ring.")
+            except Exception as e:
+                await status_msg.edit_text(f"❌ Xato: {e}")
+            finally:
+                if audio_path and audio_path.exists():
+                    audio_path.unlink()
+        else:
+            await update.message.reply_text(text)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -319,10 +443,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Men quyidagilarni qila olaman:\n\n"
         "📥 <b>Instagram yuklovchi</b> — Instagram post/reel havolasini yuboring\n"
         "▶️ <b>YouTube yuklovchi</b> — YouTube video yoki Shorts havolasini yuboring\n"
-        "🎵 <b>TikTok yuklovchi</b> — TikTok video havolasini yuboring\n\n"
+        "🎵 <b>TikTok yuklovchi</b> — TikTok video havolasini yuboring\n"
+        "🎶 <b>Qo'shiq qidirish</b> — Qo'shiq nomini yozing yoki /qoshiq buyrug'ini ishlating\n\n"
         "/start — xush kelibsiz xabarini ko'rsatish\n"
         "/help — barcha buyruqlar ro'yxati\n"
-        "/echo &lt;matn&gt; — xabaringizni qaytarish\n"
+        "/qoshiq &lt;nom&gt; — qo'shiq qidirish\n"
         "/time — joriy sana va vaqtni ko'rsatish\n"
         "/info — Telegram hisob ma'lumotlarini ko'rsatish"
     )
@@ -333,15 +458,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "<b>Mavjud buyruqlar:</b>\n\n"
         "/start — xush kelibsiz xabari\n"
         "/help — yordam ko'rsatish\n"
-        "/echo &lt;matn&gt; — xabarni takrorlash\n"
+        "/qoshiq &lt;nom&gt; — qo'shiq qidirish va yuklash\n"
         "/time — joriy sana va vaqt\n"
         "/info — hisob ma'lumotlari\n\n"
         "📥 <b>Instagram yuklovchi:</b>\n"
-        "Istalgan Instagram post yoki reel havolasini yuboring — videoni qaytaraman.\n\n"
+        "Istalgan Instagram post yoki reel havolasini yuboring.\n\n"
         "▶️ <b>YouTube yuklovchi:</b>\n"
-        "Istalgan YouTube video yoki Shorts havolasini yuboring — videoni qaytaraman.\n\n"
+        "Istalgan YouTube video yoki Shorts havolasini yuboring.\n\n"
         "🎵 <b>TikTok yuklovchi:</b>\n"
-        "Istalgan TikTok video havolasini yuboring — videoni qaytaraman."
+        "Istalgan TikTok video havolasini yuboring.\n\n"
+        "🎶 <b>Qo'shiq qidirish:</b>\n"
+        "Qo'shiq nomini yozing yoki /qoshiq &lt;nom&gt; buyrug'ini ishlating."
     )
 
 
@@ -382,6 +509,8 @@ def main() -> None:
     app.add_handler(CommandHandler("echo", echo_command))
     app.add_handler(CommandHandler("time", time_command))
     app.add_handler(CommandHandler("info", info_command))
+    app.add_handler(CommandHandler("qoshiq", handle_song_search))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice_song_search))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo_message))
 
     logger.info("Bot ishga tushdi...")
@@ -390,3 +519,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
