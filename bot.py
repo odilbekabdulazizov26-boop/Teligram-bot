@@ -62,9 +62,10 @@ async def download_instagram_video(url: str) -> Path | None:
         "yt-dlp",
         "--no-playlist",
         "--max-filesize", "50m",
-        "-f", "bestvideo+bestaudio/best",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
         "--merge-output-format", "mp4",
         "--no-check-certificate",
+        "--extractor-args", "instagram:player_client=web",
         "-o", out_template,
         url,
     ]
@@ -391,3 +392,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
