@@ -38,7 +38,6 @@ TIKTOK_PATTERN = re.compile(
 DOWNLOAD_DIR = Path("/tmp/tg_bot_downloads")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Telegram video size limit: 50 MB
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
 
@@ -58,36 +57,34 @@ async def download_instagram_video(url: str) -> Path | None:
     out_id = uuid.uuid4().hex
     out_template = str(DOWNLOAD_DIR / f"{out_id}.%(ext)s")
 
-    cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "--max-filesize", "50m",
-        "-f", "(bestvideo+bestaudio)/best",
-        "--merge-output-format", "mp4",
-        "--no-check-certificate",
-        "--extractor-args", "instagram:player_client=web",
-        "--postprocessor-args", "ffmpeg:-c:v copy -c:a aac",
-        "-o", out_template,
-        url,
-    ]
+    # Avval bestvideo+bestaudio, muvaffaqiyatsiz bo'lsa best
+    for fmt in ["bestvideo+bestaudio", "best"]:
+        cmd = [
+            "yt-dlp",
+            "--no-playlist",
+            "--max-filesize", "50m",
+            "-f", fmt,
+            "--merge-output-format", "mp4",
+            "--no-check-certificate",
+            "-o", out_template,
+            url,
+        ]
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
 
-    if proc.returncode != 0:
-        logger.error("yt-dlp failed: %s", stderr.decode())
-        return None
+        matches = list(DOWNLOAD_DIR.glob(f"{out_id}.*"))
+        if matches:
+            return matches[0]
 
-    matches = list(DOWNLOAD_DIR.glob(f"{out_id}.*"))
-    if not matches:
-        logger.error("yt-dlp finished but no output file found")
-        return None
+        logger.warning("Format %s failed, trying next...", fmt)
 
-    return matches[0]
+    logger.error("All formats failed for Instagram")
+    return None
 
 
 async def download_youtube_video(url: str) -> Path | None:
@@ -117,7 +114,6 @@ async def download_youtube_video(url: str) -> Path | None:
 
     matches = list(DOWNLOAD_DIR.glob(f"{out_id}.*"))
     if not matches:
-        logger.error("yt-dlp finished but no output file found for YouTube")
         return None
 
     return matches[0]
@@ -150,7 +146,6 @@ async def download_tiktok_video(url: str) -> Path | None:
 
     matches = list(DOWNLOAD_DIR.glob(f"{out_id}.*"))
     if not matches:
-        logger.error("yt-dlp finished but no output file found for TikTok")
         return None
 
     return matches[0]
@@ -232,7 +227,7 @@ async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if file_size > MAX_FILE_SIZE:
             await status_msg.edit_text(
                 f"❌ Video juda katta ({file_size // (1024*1024)} MB).\n"
-                "Telegram maksimal 50 MB ruxsat beradi. Qisqaroq video sinab ko'ring."
+                "Telegram maksimal 50 MB ruxsat beradi."
             )
             return
 
@@ -325,7 +320,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🎵 <b>TikTok yuklovchi</b> — TikTok video havolasini yuboring\n\n"
         "/start — xush kelibsiz xabarini ko'rsatish\n"
         "/help — barcha buyruqlar ro'yxati\n"
-        "/echo &lt;matn&gt; — xabaringizni qaytarish\n"
         "/time — joriy sana va vaqtni ko'rsatish\n"
         "/info — Telegram hisob ma'lumotlarini ko'rsatish"
     )
@@ -336,15 +330,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "<b>Mavjud buyruqlar:</b>\n\n"
         "/start — xush kelibsiz xabari\n"
         "/help — yordam ko'rsatish\n"
-        "/echo &lt;matn&gt; — xabarni takrorlash\n"
         "/time — joriy sana va vaqt\n"
         "/info — hisob ma'lumotlari\n\n"
         "📥 <b>Instagram yuklovchi:</b>\n"
-        "Istalgan Instagram post yoki reel havolasini yuboring — videoni qaytaraman.\n\n"
+        "Istalgan Instagram post yoki reel havolasini yuboring.\n\n"
         "▶️ <b>YouTube yuklovchi:</b>\n"
-        "Istalgan YouTube video yoki Shorts havolasini yuboring — videoni qaytaraman.\n\n"
+        "Istalgan YouTube video yoki Shorts havolasini yuboring.\n\n"
         "🎵 <b>TikTok yuklovchi:</b>\n"
-        "Istalgan TikTok video havolasini yuboring — videoni qaytaraman."
+        "Istalgan TikTok video havolasini yuboring."
     )
 
 
@@ -393,4 +386,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-        
+            
